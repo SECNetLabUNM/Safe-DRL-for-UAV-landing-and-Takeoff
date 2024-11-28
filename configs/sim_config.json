@@ -1,29 +1,31 @@
 {
-    "env_config": {
-        "beta": 0.1,
-        "max_num_obstacles": 4,
-        "num_obstacles": 4,
-        "num_uavs": 4,
-        "obstacle_collision_weight": 1,
-        "obstacle_radius": 0.25,
-        "stp_penalty": -0.1,
-        "t_go_max": 1.0,
-        "t_go_n": 0.1,
-        "time_final": 8.0,
-        "uav_collision_weight": 1,
-        "uav_type": "UAV"
+  "env_name": "multi-uav-v0",
+
+  "env_config": {
+    "num_uavs": 2,
+    "num_obstacles": 4,
+    "uav_type": "UAV",
+    "max_time": 50.0,
+    "obstacle_radius": 0.25,
+    "uav_radius": 0.1,
+    "collision_delta": 0.1,
+    "max_velocity": 0.5,
+    "max_acceleration": 0.5,
+    "reward_params": {
+      "destination_reached_reward": 500.0,
+      "collision_penalty": -100.0,
+      "out_of_bounds_penalty": -100.0,
+      "time_step_penalty": -2.0,
+      "towards_dest_reward": 1.0,
+      "exceed_acc_penalty": -1.0,
+      "exceed_vel_penalty": -1.0
     },
-    "exp_config": {
-        "run": "PPO",
-        "checkpoint": null,
-        "safe_action_type": null,
-        "framework": "torch",
-        "training": {
-            "lr": 5e-5,
-            "use_gae": true,
-            "use_critic": true,
-            "lambda_": 0.95,
-            "gamma": 0.99
-        }
-    }
+    "seed": null,
+    "render": false
+  },
+
+  "exp_config": {
+    "run": "PPO",
+    "framework": "torch"
+  }
 }

@@ -1,16 +1,10 @@
-from math import cos, sin
 import numpy as np
-#import torch
-# scipy.integrate
-#import scipy
-#from scipy.integrate import odeint
 from enum import IntEnum
 
 
 class AgentType(IntEnum):
     U = 0  # uav
     O = 1  # obstacle
-    C = 2  # cylinder
 
 
 class ObsType(IntEnum):
@@ -20,7 +14,7 @@ class ObsType(IntEnum):
 
 class Entity:
     def __init__(self, _id, x=0.0, y=0.0, z=0.0, vx=0.0, vy=0.0, vz=0.0, r=0.1, _type=AgentType.O,
-                 direction=np.array([0.0, 0.0, 0.0]), height=0.0):
+                 direction=np.array([0.0, 0.0, 0.0]), height=0.0, collision_delta=0.1):
         self.id = _id
         self.type = _type
         self.x = x
@@ -32,8 +26,9 @@ class Entity:
         self.r = r
         self.direction = direction  # 3-bit vector representing direction
         self.height = height  # height, for sphere it's 0
+        self.collision_delta = collision_delta  # Safe distance buffer for collision
         # x, y, z, x_dot, y_dot, z_dot
-        self._state = np.array([self.x, self.y, self.z, self.vx, self.vy, self.vz,], dtype=float)
+        self._state = np.array([self.x, self.y, self.z, self.vx, self.vy, self.vz,], dtype=np.float32)
 
     @property
     def state(self):
@@ -47,54 +42,27 @@ class Entity:
     def vel(self):
         return self._state[3:6]
 
-    def in_collision(self, other_entity, delta=0.1):
+    def update_state(self, position, velocity):
+        """Updates position and velocity in state."""
+        self._state[:3] = position
+        self._state[3:6] = velocity
+
+    def in_collision(self, other_entity):
         """
         Check if this UAV is in collision with another entity (UAV, mobile NCE, or static NCE).
 
         :param other_entity: The other entity (UAV, mobile NCE, or static NCE)
-        :param delta: Safe distance buffer (default is 0.1)
         :return: True if in collision, False otherwise
         """
         if other_entity.type == AgentType.U:
             # Collision between two UAVs (both modeled as spheres)
             dist = np.linalg.norm(self.pos - other_entity.pos)
-            return dist <= (self.r + other_entity.r + delta)
+            return dist <= (self.r + other_entity.r + self.collision_delta)
 
         elif other_entity.type == AgentType.O:
             # Collision between UAV and mobile NCE (also modeled as a sphere)
             dist = np.linalg.norm(self.pos - other_entity.pos)
-            return dist <= (self.r + other_entity.r + delta)
-
-        elif other_entity.type == AgentType.C:
-            # Compute the vector from the UAV center to the cylinder center
-            p_ik = self.pos - other_entity.pos
-
-            # Get the cylinder's orientation vector (unit vector along its axis)
-            cylinder_axis = other_entity.direction  # Use the normalized direction vector directly
-
-            # Projection of the UAV's position onto the cylinder's axis
-            p_vert_ik = np.dot(p_ik, cylinder_axis) * cylinder_axis
-
-            # Vector perpendicular to the cylinder axis
-            p_perp_ik = p_ik - p_vert_ik
-
-            # Direct check if UAV is inside the cylinder bounds
-            if np.linalg.norm(p_perp_ik) <= other_entity.r and np.abs(np.linalg.norm(p_vert_ik)) <= (
-                    other_entity.height / 2):
-                return True
-
-            # More detailed check based on distances
-            if np.linalg.norm(p_perp_ik) > other_entity.r and np.abs(np.linalg.norm(p_vert_ik)) <= (
-                    other_entity.height / 2):
-                d_min = np.linalg.norm(p_perp_ik) - other_entity.r
-            elif np.linalg.norm(p_perp_ik) <= other_entity.r and np.abs(np.linalg.norm(p_vert_ik)) > (
-                    other_entity.height / 2):
-                d_min = np.abs(np.linalg.norm(p_vert_ik)) - (other_entity.height / 2)
-            else:
-                d_min = np.sqrt((np.abs(np.linalg.norm(p_vert_ik)) - other_entity.height / 2) ** 2 + (
-                            np.linalg.norm(p_perp_ik) - other_entity.r) ** 2)
-
-            return d_min <= (self.r + delta)
+            return dist <= (self.r + other_entity.r + self.collision_delta)
 
         return False
 
@@ -120,7 +88,7 @@ class Entity:
         if num_to_return is None:
             num_to_return = num_entities
         else:
-            max(0, min(num_entities, num_to_return))
+            num_to_return = max(0, min(num_entities, num_to_return))
 
         entity_states = np.array([entity.state for entity in entity_list])
 
@@ -132,19 +100,23 @@ class Entity:
 
 
 class Obstacle(Entity):
-    def __init__(self, _id, x=0.0, y=0.0, z=0.0, vx=0.0, vy=0.0, vz=0.0, r=0.1, dt=0.1, _type=ObsType.M, max_velocity=0.25):
-        super().__init__(_id, x, y, z, vx, vy, vz, r, _type=AgentType.O, direction=np.array([0.0, 0.0, 0.0]), height=0.0)
+    def __init__(self, _id, x=0.0, y=0.0, z=0.0, vx=0.0, vy=0.0, vz=0.0, r=0.1, dt=0.1, _type=ObsType.M, max_velocity=0.25, collision_delta=0.1):
+        super().__init__(_id, x, y, z, vx, vy, vz, r, _type=AgentType.O, direction=np.array([0.0, 0.0, 0.0]), height=0.0, collision_delta=collision_delta)
         self.dt = dt
         self.destination = np.array([x, y, z])
         self.max_velocity = max_velocity  # Set max velocity as a scalar
 
     def select_random_destination(self):
-        """Randomly select a new destination within the specified range."""
-        self.destination = np.array([
-            np.random.uniform(-5, 5),  # x range
-            np.random.uniform(-5, 5),  # y range
-            np.random.uniform(0, 5)  # z range
-        ])
+        """Randomly select a new destination, ensuring it's sufficiently far from the current position."""
+        while True:
+            new_destination = np.array([
+                np.random.uniform(-5, 5),  # x range
+                np.random.uniform(-5, 5),  # y range
+                np.random.uniform(1, 4)  # z range
+            ])
+            if np.linalg.norm(new_destination - self.pos) > 1.0:
+                self.destination = new_destination
+                break
 
     def step(self):
         # Small epsilon value to avoid division by zero
@@ -157,7 +129,7 @@ class Obstacle(Entity):
             distance = np.linalg.norm(direction)
             #print(f"distance:{distance}")
             # If reached destination, select a new random destination
-            if distance < 0.1:
+            if distance <= 0.1:
                 self.select_random_destination()
                 direction = self.destination - self.pos
                 distance = np.linalg.norm(direction)
@@ -168,114 +140,25 @@ class Obstacle(Entity):
             velocity = self.max_velocity * (direction / (distance + epsilon))
             #print(f"velocity:{velocity}")
             # Update the state of the obstacle
-            self._state[3:6] = velocity  # update velocity
-            self._state[:3] += velocity * self.dt  # update position
+
+            new_position = self.pos + velocity * self.dt
+            self.update_state(new_position, velocity)
             #print(f"State -- Position: {self.pos}, Velocity: {self.vel}")
         else:
             # Fixed obstacles do nothing
             pass
 
 
-class Cylinder(Entity):
-    def __init__(self, _id, x, y, z, direction, height, r):
-        # Initialize with unified format using x, y, z, and direction vector
-        super().__init__(_id=_id, x=x, y=y, z=z, r=r, _type=AgentType.C, direction=direction, height=height)
-
-        # Normalize the direction vector
-        magnitude = np.linalg.norm(self.direction)
-        if magnitude > 0:  # To avoid division by zero
-            self.direction = self.direction / magnitude
-
-    def step(self):
-        # Cylinders do not move; step function does nothing for now
-        pass
-
-
-class Platform:
-    def __init__(self, platform_params, height_above_top_cap=0.5):
-        self.platforms = []
-        self.destination_info = []
-        self.create_platforms(platform_params, height_above_top_cap)
-
-    def create_platforms(self, platform_params, height_above_top_cap):
-        """Create platforms (cylinders) from the platform_params and calculate destination."""
-        for idx, (key, params) in enumerate(platform_params.items()):
-            # Unified format
-            cylinder = Cylinder(
-                _id=idx,
-                x=params['x'],
-                y=params['y'],
-                z=params['z'],
-                direction=params['direction'],
-                height=params['height'],
-                r=params['r']
-            )
-            self.platforms.append(cylinder)
-
-            # Calculate the destination point above the top cap of the cylinder
-            top_cap_z = params['z'] + params['direction'][2] * params['height'] / 2
-            destination = np.array([params['x'], params['y'], top_cap_z + height_above_top_cap])
-            self.destination_info.append(destination)
-
-    def step(self):
-        pass
-
-
-class Connector:
-    def __init__(self, connector_params):
-        self.connectors = []
-        self.create_connectors(connector_params)
-
-    def create_connectors(self, connector_params):
-        """Create connectors (cylinders) from the connector_params."""
-        for idx, (key, params) in enumerate(connector_params.items()):
-            # Unified format
-            cylinder = Cylinder(
-                _id=idx,
-                x=params['x'],
-                y=params['y'],
-                z=params['z'],
-                direction=params['direction'],
-                height=params['height'],
-                r=params['r']
-            )
-            self.connectors.append(cylinder)
-
-    def step(self):
-        pass
-
-
-class Vertiport:
-    def __init__(self, cylinder_params):
-        self.platform = None
-        self.connector = None
-        self.create_vertiport(cylinder_params)
-
-    def create_vertiport(self, cylinder_params):
-        """Separate platforms and connectors and create them as part of the vertiport."""
-        platform_params = {k: v for k, v in cylinder_params.items() if 'platform' in k}
-        connector_params = {k: v for k, v in cylinder_params.items() if 'connector' in k or 'center' in k}
-
-        # Create platforms and connectors
-        self.platform = Platform(platform_params)
-        self.connector = Connector(connector_params)
-
-    def step(self):
-        pass
-
-
 class UAV(Entity):
-    def __init__(self, _id, x=0.0, y=0.0, z=0.0, vx=0.0, vy=0.0, vz=0.0, r=0.1, dt=0.1, platform=None):
-        super().__init__(_id, x, y, z, vx, vy, vz, r, _type=AgentType.U, direction=np.array([0.0, 0.0, 0.0]), height=0.0)
+    def __init__(self, _id, x=0.0, y=0.0, z=0.0, vx=0.0, vy=0.0, vz=0.0, r=0.1, dt=0.1, collision_delta=0.1):
+        super().__init__(_id, x, y, z, vx, vy, vz, r, _type=AgentType.U, direction=np.array([0.0, 0.0, 0.0]), height=0.0, collision_delta=collision_delta)
         self.dt = dt  # Time step
         self.acceleration = np.zeros(3)  # Acceleration along x, y, z
-        self.platform = platform  # Reference to the platform containing destination info
         self.destination = None  # UAV's current target destination
         self.done = False  # Initialize the done attribute
         # Set the initial destination if not provided
-        if self.destination is None and self.platform is not None and len(self.platform.destination_info) > 0:
-            # Use platform destination if no destination is provided
-            self.destination = self.platform.destination_info[0]
+        if self.destination is None:
+            self.destination = np.array([0.0, 0.0, 0.0])
 
     def step(self, input_acceleration=np.zeros(3)):
         """Updates the UAV's position and velocity using the provided acceleration input."""
@@ -289,8 +172,7 @@ class UAV(Entity):
         new_position = self._state[:3] + (self.vel + new_velocity) * self.dt / 2
 
         # Update state
-        self._state[:3] = new_position
-        self._state[3:6] = new_velocity
+        self.update_state(new_position, new_velocity)
 
     def check_dest_reached(self):
         """Check if the UAV has reached its destination."""
@@ -313,11 +195,8 @@ class UAV(Entity):
         """Sets a new destination, either provided or from the platform."""
         if destination is not None:
             self.destination = destination
-        elif self.platform is not None and len(self.platform.destination_info) > destination_index:
-            self.destination = self.platform.destination_info[destination_index]
         else:
             self.destination = None
-
 
 class Grid:
     def __init__(self, grid_size=4, spacing=1.0, z_height=0.0):
@@ -343,10 +222,11 @@ class Grid:
         return grid
 
     def get_random_point(self):
-        """Randomly return a point from the grid."""
+        """Randomly return a point from the grid if available."""
         if self.grid_points:
             return self.grid_points.pop(np.random.randint(0, len(self.grid_points)))
-        return None
+        else:
+            raise ValueError("No spots left in the grid.")
 
     def reset(self):
         """Reset the grid points and return the new grid."""
