@@ -118,7 +118,7 @@ class UavSim(MultiAgentEnv):
             obstacles.append(obstacle)
         return obstacles
 
-    def _initialize_uavs(self, num_uav_grid_1_start, num_uav_grid_2_start, grid_1_points, grid_2_points):
+    def _initialize_uavs(self, num_uav_grid_1_start, grid_1_points, grid_2_points):
         """Initialize UAVs, ensuring no collisions at start"""
         grid_1_points_copy = grid_1_points.copy()
         #(f"grid_1_points_copy: {grid_1_points_copy}")
@@ -528,10 +528,11 @@ class UavSim(MultiAgentEnv):
         # Randomly determine how many UAVs will start from the grid
         num_uav_grid_1_start = np.random.randint(0, self.num_uavs + 1)  # Random number of UAVs from grid
         #print(f"num_uav_grid_1_start: {num_uav_grid_1_start}")
-        num_uav_grid_2_start = self.num_uavs - num_uav_grid_1_start  # The rest will start from platform
+        # No need to calculate rest points. Because range(num_uav_grid_1_start, number_uav) means the rest.
+        #num_uav_grid_2_start = self.num_uavs - num_uav_grid_1_start  # The rest will start from platform
         #print(f"num_uav_grid_2_start: {num_uav_grid_2_start}")
         # Initialize UAVs, ensuring no collisions at start
-        self._initialize_uavs(num_uav_grid_1_start, num_uav_grid_2_start, grid_1_points, grid_2_points)
+        self._initialize_uavs(num_uav_grid_1_start, grid_1_points, grid_2_points)
 
         #print(self.uavs)
         # Calculate initial observations and rewards

@@ -5,9 +5,10 @@ import numpy as np
 import ray
 from ray import air, tune
 from pathlib import Path
+from ray.tune.registry import register_env
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.tune.registry import get_trainable_cls
-from uav_sim.utils.callbacks import TrainCallback
+from uav_sim.utils.callbacks import CustomTrainingCallback
 from ray.rllib.algorithms.callbacks import make_multi_callbacks
 from ray.rllib.models import ModelCatalog
 from uav_sim.envs.uav_sim import UavSim
@@ -20,6 +21,10 @@ PATH = Path(__file__).parent.absolute().resolve()
 RESULTS_DIR = Path.home() / "ray_results"
 logger = logging.getLogger(__name__)
 
+def env_creator(env_config):
+    return UavSim(env_config)
+
+register_env("multi-uav-v0", env_creator)
 
 def setup_stream(logging_level=logging.DEBUG):
     # Turns on logging to console
@@ -101,7 +106,7 @@ def train(args):
     # })
 
     task_fn = None
-    callback_list = [CustomTrainingCallback()]
+    callback_list = [CustomTrainingCallback]
 
     # Configure the training algorithm
     train_config = (

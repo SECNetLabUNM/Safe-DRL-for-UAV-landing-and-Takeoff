@@ -4,50 +4,98 @@ from ray.rllib.algorithms.callbacks import DefaultCallbacks
 from ray.rllib.env import BaseEnv
 from ray.rllib.evaluation import Episode, RolloutWorker
 from ray.rllib.policy import Policy
+import logging
 
-class TrainCallback(DefaultCallbacks):
-    def on_episode_start(self, *, worker: RolloutWorker, base_env: BaseEnv, policies: Dict[str, Policy], episode: Episode, env_index: int, **kwargs):
-        # Initialize data structures to track metrics for the episode
-        episode.user_data["collisions_with_uavs"] = 0
-        episode.user_data["collisions_with_obstacles"] = 0
-        episode.user_data["collisions_with_cylinders"] = 0
-        episode.user_data["out_of_bounds"] = 0
-        episode.user_data["reached_destination"] = {}
-        episode.user_data["time_to_reach_destination"] = {}
-        episode.user_data["rewards"] = {}
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-    def on_episode_step(self, *, worker: RolloutWorker, base_env: BaseEnv, policies: Dict[str, Policy], episode: Episode, env_index: int, **kwargs):
-        # Aggregate data at each step
-        info = episode.last_info_for()
-        if info:
-            # Update collision counters
-            episode.user_data["collisions_with_uavs"] += info.get("uav_collision", 0)
-            episode.user_data["collisions_with_obstacles"] += info.get("obstacle_collision", 0)
-            episode.user_data["collisions_with_cylinders"] += info.get("cylinder_collision", 0)
-            # Track if a UAV flies out of the world bounds
-            if info.get("out_of_bounds", False):
-                episode.user_data["out_of_bounds"] += 1
+class CustomTrainingCallback(DefaultCallbacks):
+    def on_episode_start(
+        self,
+        *,
+        worker: RolloutWorker,
+        base_env: BaseEnv,
+        policies: Dict[str, Policy],
+        episode: Episode,
+        env_index: int,
+        **kwargs
+    ):
+        """
+        Called at the start of each episode.
+        """
+        assert episode.length <= 0, (
+            "ERROR: `on_episode_start()` callback should be called right "
+            "after env reset!"
+        )
+        logger.info(f"Episode {episode.episode_id} (env-idx={env_index}) started.")
 
-    def on_episode_end(self, *, worker: RolloutWorker, base_env: BaseEnv, policies: Dict[str, Policy], episode: Episode, env_index: int, **kwargs):
-        # Process metrics at the end of each episode
-        for agent_id in episode.agent_rewards:
+        # Initialize custom metrics for tracking collisions, goal reach times, etc.
+        episode.user_data["obstacle_collisions"] = []
+        episode.user_data["uav_collisions"] = []
+        episode.user_data["uav_reached_dest"] = []
+        episode.user_data["uav_out_of_bounds"] = []
+        episode.user_data["time_step"] = []
+
+    def on_episode_step(
+        self,
+        *,
+        worker: RolloutWorker,
+        base_env: BaseEnv,
+        policies: Dict[str, Policy],
+        episode: Episode,
+        env_index: int,
+        **kwargs
+    ):
+        """
+        Called at each step of the episode.
+        """
+        assert episode.length > 0, (
+            "ERROR: `on_episode_step()` callback should not be called right "
+            "after env reset!"
+        )
+        agent_ids = episode.get_agents()
+
+        for agent_id in agent_ids:
             last_info = episode.last_info_for(agent_id)
-            if last_info:
-                # Track whether each UAV reached its destination
-                episode.user_data["reached_destination"][agent_id] = last_info.get("reached_destination", False)
-                # Record the time taken to reach the destination if applicable
-                if last_info.get("reached_destination", False):
-                    episode.user_data["time_to_reach_destination"][agent_id] = episode.length
-                # Aggregate rewards for each UAV
-                episode.user_data["rewards"][agent_id] = episode.total_reward
+            if last_info is not None:
+                episode.user_data["obstacle_collisions"].append(last_info["obstacle_collision"])
+                episode.user_data["uav_collisions"].append(last_info["uav_collision"])
+                episode.user_data["uav_reached_dest"].append(last_info["uav_reached_dest"])
+                episode.user_data["uav_out_of_bounds"].append(last_info["uav_out_of_bounds"])
+                episode.user_data["time_step"].append(last_info["time_step"])
 
-        # Compute and store custom metrics
-        episode.custom_metrics["total_collisions_with_uavs"] = episode.user_data["collisions_with_uavs"]
-        episode.custom_metrics["total_collisions_with_obstacles"] = episode.user_data["collisions_with_obstacles"]
-        episode.custom_metrics["total_collisions_with_cylinders"] = episode.user_data["collisions_with_cylinders"]
-        episode.custom_metrics["total_out_of_bounds"] = episode.user_data["out_of_bounds"]
-        episode.custom_metrics["rewards_at_episode_end"] = sum(episode.user_data["rewards"].values())
+    def on_episode_end(
+        self,
+        *,
+        worker: RolloutWorker,
+        base_env: BaseEnv,
+        policies: Dict[str, Policy],
+        episode: Episode,
+        env_index: int,
+        **kwargs
+    ):
+        """
+        Called at the end of each episode.
+        """
+        agent_ids = episode.get_agents()
+        num_agents = len(agent_ids)
 
-        # Compute averages for metrics where applicable
-        episode.custom_metrics["average_time_to_reach_destination"] = np.mean(list(episode.user_data["time_to_reach_destination"].values()))
-        episode.custom_metrics["percentage_reached_destination"] = np.mean([1 if v else 0 for v in episode.user_data["reached_destination"].values()])
+        # Compute average metrics for the episode
+        obstacle_collisions = np.sum(episode.user_data["obstacle_collisions"]) / num_agents
+        uav_collisions = np.sum(episode.user_data["uav_collisions"]) / num_agents
+        uav_reached_dest = np.sum(episode.user_data["uav_reached_dest"]) / num_agents
+        uav_out_of_bounds = np.sum(episode.user_data["uav_out_of_bounds"]) / num_agents
+        avg_time_step = np.mean(episode.user_data["time_step"]) if episode.user_data["time_step"] else 0.0
+
+        # Log custom metrics
+        episode.custom_metrics["obstacle_collisions"] = obstacle_collisions
+        episode.custom_metrics["uav_collisions"] = uav_collisions
+        episode.custom_metrics["uav_reached_dest"] = uav_reached_dest
+        episode.custom_metrics["uav_out_of_bounds"] = uav_out_of_bounds
+        episode.custom_metrics["avg_time_step"] = avg_time_step
+
+        logger.info(
+            f"Episode {episode.episode_id} ended: Obstacle Collisions = {obstacle_collisions}, "
+            f"UAV Collisions = {uav_collisions}, UAV Reached Destination = {uav_reached_dest}, "
+            f"UAV Out of Bounds = {uav_out_of_bounds}, Average Time Step = {avg_time_step}"
+        )
